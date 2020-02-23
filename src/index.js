@@ -41,6 +41,7 @@ const botName = 'Help Bot'
 const username = 'help-bot'
 const password = 'ocrccdemo'
 const userId = "@help-bot:rhok.space"
+const waitingRoomId = '!pYVVPyFKacZeKZbWyz:rhok.space'
 
 let awaitingAgreement = {}
 
@@ -85,7 +86,17 @@ const sendMessage = (client, roomId, msgText) => {
 }
 
 const notifyFacilitators = (client, roomId) => {
-
+  client.getJoinedRoomMembers(waitingRoomId)
+  .then((members) => {
+    logger.log("info", "MEMBERS")
+    logger.log("info", members)
+    Object.keys(members["joined"]).forEach((member) => {
+      if (member !== userId)
+      client.invite(roomId, member)
+    })
+  })
+  // const notif = `There is a support seeker waiting. Go to https://riot.im/app/#/room/${roomId} to respond.`
+  // sendMessage(client, waitingRoomId, notif)
 }
 
 client.login('m.login.password', {
@@ -120,11 +131,14 @@ client.login('m.login.password', {
   // Automatically join all room invitations
   client.on("RoomMember.membership", (event, member) => {
     if (member.membership === "invite" && member.userId === userId) {
+      logger.log("info", "Auto-joining room " + member.roomId)
       client.joinRoom(member.roomId)
       .then(() => client.setRoomEncryption(member.roomId, ENCRYPTION_CONFIG))
       .then(() => {
-        sendMessage(client, member.roomId, 'Do you want to continue?')
-        awaitingAgreement[member.roomId] = true
+        if (member.roomId !== waitingRoomId) {
+          sendMessage(client, member.roomId, 'Do you want to continue?')
+          awaitingAgreement[member.roomId] = true
+        }
       })
     }
   });
