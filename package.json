@@ -1,0 +1,85 @@
+{
+  "name": "ocrcc-bot",
+  "version": "0.1.0",
+  "description": "Chatbot to manage interactions on OCRCC client chatbots",
+  "main": "dist/ocrcc-chatbot.js",
+  "scripts": {
+    "build": "NODE_ENV=production webpack-cli --mode production",
+    "start": "webpack-dev-server",
+    "develop": "webpack --mode development --watch",
+    "test": "jest",
+    "lint": "./node_modules/.bin/eslint ."
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "config": "^3.2.5",
+    "matrix-bot-sdk": "^0.5.0",
+    "matrix-js-sdk": "^5.0.0",
+    "node-localstorage": "^2.1.5",
+    "olm": "https://packages.matrix.org/npm/olm/olm-3.1.4.tgz",
+    "uuidv4": "^6.0.2",
+    "winston": "^3.2.1"
+  },
+  "devDependencies": {
+    "@babel/core": "7.7.7",
+    "@babel/plugin-proposal-class-properties": "7.7.4",
+    "@babel/plugin-proposal-decorators": "7.7.4",
+    "@babel/plugin-proposal-export-namespace-from": "7.7.4",
+    "@babel/plugin-proposal-function-sent": "7.7.4",
+    "@babel/plugin-proposal-json-strings": "7.7.4",
+    "@babel/plugin-proposal-numeric-separator": "7.7.4",
+    "@babel/plugin-proposal-throw-expressions": "7.7.4",
+    "@babel/plugin-syntax-dynamic-import": "7.7.4",
+    "@babel/plugin-syntax-import-meta": "7.7.4",
+    "@storybook/addon-actions": "5.2.8",
+    "@storybook/addon-links": "5.2.8",
+    "@storybook/addons": "5.2.8",
+    "@storybook/react": "5.2.8",
+    "babel-core": "7.0.0-bridge.0",
+    "babel-eslint": "10.0.3",
+    "babel-jest": "24.9.0",
+    "babel-loader": "8.0.6",
+    "babel-preset-airbnb": "4.4.0",
+    "clean-webpack-plugin": "3.0.0",
+    "copy-webpack-plugin": "5.1.1",
+    "enzyme": "3.11.0",
+    "enzyme-adapter-react-16": "1.15.2",
+    "enzyme-to-json": "3.4.3",
+    "eslint": "6.8.0",
+    "eslint-config-airbnb": "18.0.1",
+    "eslint-import-resolver-webpack": "0.12.0",
+    "eslint-loader": "3.0.3",
+    "eslint-plugin-import": "2.19.1",
+    "eslint-plugin-jsx-a11y": "6.2.3",
+    "eslint-plugin-react": "7.17.0",
+    "jest": "24.9.0",
+    "jest-cli": "24.9.0",
+    "webpack": "4.41.5",
+    "webpack-cli": "3.3.10",
+    "webpack-dev-server": "3.10.1",
+    "webpack-obfuscator": "0.22.0",
+    "webpack-serve": "3.2.0"
+  },
+  "babel": {
+    "presets": [
+      "airbnb"
+    ],
+    "plugins": [
+      "@babel/plugin-syntax-dynamic-import",
+      "@babel/plugin-syntax-import-meta",
+      "@babel/plugin-proposal-class-properties",
+      "@babel/plugin-proposal-json-strings",
+      [
+        "@babel/plugin-proposal-decorators",
+        {
+          "legacy": true
+        }
+      ],
+      "@babel/plugin-proposal-function-sent",
+      "@babel/plugin-proposal-export-namespace-from",
+      "@babel/plugin-proposal-numeric-separator",
+      "@babel/plugin-proposal-throw-expressions"
+    ]
+  }
+}
