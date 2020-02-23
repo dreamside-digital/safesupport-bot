@@ -42,8 +42,14 @@ const username = 'help-bot'
 const password = 'ocrccdemo'
 const userId = "@help-bot:rhok.space"
 const waitingRoomId = '!pYVVPyFKacZeKZbWyz:rhok.space'
+const introMessage = 'This chat application does not collect any of your personal data or any data from your use of this service.'
+const termsUrl = 'https://tosdr.org/'
+const agreementMessage = 'Do you want to continue?'
+const confirmationMessage = 'A faciltator will be with you soon.'
+const exitMessage = 'That chat was not started. You can close this chatbox.'
 
 let awaitingAgreement = {}
+let awaitingFacilitator = {}
 
 let client = matrix.createClient(homeserverUrl)
 
@@ -60,15 +66,13 @@ let localStorage = global.localStorage;
 
 let deviceId = localStorage.getItem('deviceId')
 
-const sendMessage = (client, roomId, msgText) => {
-  client.sendTextMessage(roomId, msgText)
+const sendMessage = (roomId, msgText) => {
+  return client.sendTextMessage(roomId, msgText)
   .then((res) => {
     logger.log('info', "Message sent")
     logger.log('info', res)
   })
   .catch((err) => {
-    logger.log('error', "Error sending message");
-    logger.log('error', err);
     switch (err["name"]) {
       case "UnknownDeviceError":
         Object.keys(err.devices).forEach((userId) => {
@@ -76,16 +80,18 @@ const sendMessage = (client, roomId, msgText) => {
               client.setDeviceVerified(userId, deviceId, true);
           });
         });
-        sendMessage(client, roomId, msgText)
+        return sendMessage(roomId, msgText)
         break;
       default:
-        // logger.log('error', err);
+        logger.log('error', "Error sending message");
+        logger.log('error', err);
         break;
     }
   })
 }
 
-const notifyFacilitators = (client, roomId) => {
+const inviteFacilitators = (roomId) => {
+  awaitingFacilitator[roomId] = true
   client.getJoinedRoomMembers(waitingRoomId)
   .then((members) => {
     logger.log("info", "MEMBERS")
@@ -96,7 +102,31 @@ const notifyFacilitators = (client, roomId) => {
     })
   })
   // const notif = `There is a support seeker waiting. Go to https://riot.im/app/#/room/${roomId} to respond.`
-  // sendMessage(client, waitingRoomId, notif)
+  // sendMessage(waitingRoomId, notif)
+}
+
+const kickFacilitators = (roomId) => {
+  awaitingFacilitator[roomId] = false
+  client.getJoinedRoomMembers(waitingRoomId)
+  .then((allFacilitators) => {
+    client.getJoinedRoomMembers(roomId)
+    .then((roomMembers) => {
+      const membersIds = Object.keys(roomMembers["joined"])
+      const facilitatorsIds = Object.keys(allFacilitators["joined"])
+      facilitatorsIds.forEach((f) => {
+        if (!membersIds.includes(f)) {
+          logger.log("info", "kicking out " + f + " from " + roomId)
+          client.kick(roomId, f, "A facilitator has already joined this chat.")
+          .then(() => {
+            logger.log("info", "Kick success")
+          })
+          .catch((err) => {
+            logger.log("error", err)
+          })
+        }
+      })
+    })
+  })
 }
 
 client.login('m.login.password', {
@@ -136,10 +166,19 @@ client.login('m.login.password', {
       .then(() => client.setRoomEncryption(member.roomId, ENCRYPTION_CONFIG))
       .then(() => {
         if (member.roomId !== waitingRoomId) {
-          sendMessage(client, member.roomId, 'Do you want to continue?')
-          awaitingAgreement[member.roomId] = true
+          sendMessage(member.roomId, introMessage)
+          .then(() => sendMessage(member.roomId, `Please read the terms and conditions at ${termsUrl}`))
+          .then(() => sendMessage(member.roomId, agreementMessage))
+          .then(() => awaitingAgreement[member.roomId] = true)
         }
       })
+    }
+
+    logger.log("info", "Membership event: " + JSON.stringify(member))
+    logger.log("info", "Awaiting facilitator: " + awaitingFacilitator[member.roomId])
+
+    if (member.membership === 'join' && awaitingFacilitator[member.roomId]) {
+      kickFacilitators(member.roomId)
     }
   });
 
@@ -152,11 +191,11 @@ client.login('m.login.password', {
 
       if (sender !== userId && awaitingAgreement[roomId]) {
         if (body.toLowerCase().startsWith('yes')) {
-          sendMessage(client, roomId, "A facilitator will be with you soon.")
-          notifyFacilitators(client, roomId)
+          sendMessage(roomId, confirmationMessage)
+          inviteFacilitators(roomId)
           awaitingAgreement[roomId] = false
         } else {
-          sendMessage(client, roomId, "Ok, bye")
+          sendMessage(roomId, exitMessage)
           awaitingAgreement[roomId] = false
         }
       }
