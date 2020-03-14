@@ -10,15 +10,14 @@ import * as matrix from "matrix-js-sdk";
 
 import logger from "./logger";
 
-
 const ENCRYPTION_CONFIG = { algorithm: "m.megolm.v1.aes-sha2" };
 
 class OcrccBot {
   constructor() {
-    this.awaitingAgreement = {};
     this.awaitingFacilitator = {};
     this.client = matrix.createClient(process.env.MATRIX_SERVER_URL);
     this.joinedRooms = [];
+    this.activeChatrooms = {};
   }
 
   createLocalStorage() {
@@ -32,28 +31,21 @@ class OcrccBot {
   }
 
   sendMessage(roomId, msgText) {
-    return this.client
-      .sendTextMessage(roomId, msgText)
-      .then(res => {
-        logger.log("info", "Message sent");
-        logger.log("info", res);
-      })
-      .catch(err => {
-        switch (err["name"]) {
-          case "UnknownDeviceError":
-            Object.keys(err.devices).forEach(userId => {
-              Object.keys(err.devices[userId]).map(deviceId => {
-                this.client.setDeviceVerified(userId, deviceId, true);
-              });
+    return this.client.sendTextMessage(roomId, msgText).catch(err => {
+      switch (err["name"]) {
+        case "UnknownDeviceError":
+          Object.keys(err.devices).forEach(userId => {
+            Object.keys(err.devices[userId]).map(deviceId => {
+              this.client.setDeviceVerified(userId, deviceId, true);
             });
-            return this.sendMessage(roomId, msgText);
-            break;
-          default:
-            logger.log("error", "Error sending message");
-            logger.log("error", err);
-            break;
-        }
-      });
+          });
+          return this.sendMessage(roomId, msgText);
+          break;
+        default:
+          logger.log("error", `ERROR SENDING MESSAGE: ${err}`);
+          break;
+      }
+    });
   }
 
   inviteFacilitators(roomId) {
@@ -68,7 +60,11 @@ class OcrccBot {
           if (user.presence === "online" && member !== process.env.BOT_USERID) {
             logger.log("info", "INVITING MEMBER: " + member);
             chatOffline = false;
-            this.client.invite(roomId, member);
+            this.client
+              .invite(roomId, member)
+              .catch(err =>
+                logger.log("error", `ERROR INVITING MEMBER: ${err}`)
+              );
           }
         });
       })
@@ -78,8 +74,7 @@ class OcrccBot {
         }
       })
       .catch(err => {
-        logger.log("error", "ERROR GETTING ROOM MEMBERS");
-        logger.log("error", err);
+        logger.log("error", `ERROR GETTING ROOM MEMBERS: ${err}`);
       });
   }
 
@@ -100,7 +95,7 @@ class OcrccBot {
                   logger.log("info", "Kick success");
                 })
                 .catch(err => {
-                  logger.log("error", err);
+                  logger.log("error", `ERROR UNINVITING ROOM MEMBERS: ${err}`);
                 });
             }
           });
@@ -135,13 +130,10 @@ class OcrccBot {
         this.client = matrix.createClient(opts);
       })
       .catch(err => {
-        logger.log("error", `Login error: ${err}`);
+        logger.log("error", `ERROR WITH LOGIN: ${err}`);
       })
-      .then(() =>
-        this.client.initCrypto().catch(err => {
-          logger.log("error", `ERROR STARTING CRYPTO: ${err}`);
-        })
-      )
+      .then(() => this.client.initCrypto())
+      .catch(err => logger.log("error", `ERROR STARTING CRYPTO: ${err}`))
       .then(() =>
         this.client.getJoinedRooms().then(data => {
           this.joinedRooms = data["joined_rooms"];
@@ -163,17 +155,22 @@ class OcrccBot {
                   process.env.FACILITATOR_ROOM_ID,
                   `A support seeker requested a chat (Room ID: ${member.roomId})`
                 );
-                this.client.setRoomEncryption(member.roomId, ENCRYPTION_CONFIG);
               })
-              .then(() => this.inviteFacilitators(member.roomId));
+              .then(() => this.inviteFacilitators(member.roomId))
+              .catch(err => {
+                logger.log("error", err);
+              });
           }
 
-          // When the first facilitator joins a support session, uninvite the other facilitators
+          // When a facilitator joins a support session, revoke the other invitations
           if (
             member.membership === "join" &&
             member.userId !== process.env.BOT_USERID &&
             this.awaitingFacilitator[member.roomId]
           ) {
+            this.activeChatrooms[member.roomId] = {
+              facilitator: member.userId
+            };
             this.sendMessage(
               member.roomId,
               `${member.name} has joined the chat.`
@@ -184,9 +181,22 @@ class OcrccBot {
             );
             this.uninviteFacilitators(member.roomId);
           }
+
+          if (
+            member.membership === "leave" &&
+            member.userId !== process.env.BOT_USERID &&
+            this.activeChatrooms[member.roomId] &&
+            member.userId === this.activeChatrooms[member.roomId].facilitator
+          ) {
+            this.sendMessage(
+              member.roomId,
+              `${member.name} has left the chat.`
+            );
+          }
         });
       })
-      .finally(() => this.client.startClient());
+      .then(() => this.client.startClient({ initialSyncLimit: 0 }))
+      .catch(err => logger.log("error", `ERROR INITIALIZING CLIENT: ${err}`));
   }
 }
 
