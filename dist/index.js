@@ -32,6 +32,9 @@ global.Olm = require("olm");
 var ENCRYPTION_CONFIG = {
   algorithm: "m.megolm.v1.aes-sha2"
 };
+var KICK_REASON = "A facilitator has already joined this chat.";
+var BOT_ERROR_MESSAGE = "Something went wrong on our end, please restart the chat and try again.";
+var MAX_RETRIES = 3;
 
 var OcrccBot =
 /*#__PURE__*/
@@ -77,6 +80,74 @@ function () {
           default:
             _logger["default"].log("error", "ERROR SENDING MESSAGE: ".concat(err));
 
+            _this.handleBotCrash(roomId, err);
+
+            break;
+        }
+      });
+    }
+  }, {
+    key: "inviteUserToRoom",
+    value: function inviteUserToRoom(client, roomId, member) {
+      var _this2 = this;
+
+      var retries = arguments.length > 3 && arguments[3] !== undefined ? arguments[3] : 0;
+
+      _logger["default"].log("info", "INVITING MEMBER: " + member);
+
+      if (retries > MAX_RETRIES) {
+        this.handleBotCrash(roomId, "Rate limit exceeded for bot account");
+        return _logger["default"].log("error", "RATE LIMIT EXCEEDED AND RETRY LIMIT EXCEEDED");
+      }
+
+      return client.invite(roomId, member)["catch"](function (err) {
+        switch (err["name"]) {
+          case "M_LIMIT_EXCEEDED":
+            _logger["default"].log("info", "Rate limit exceeded, retrying.");
+
+            var retryCount = retries + 1;
+            var delay = retryCount * 2 * 1000;
+            return setTimeout(_this2.inviteUserToRoom, delay, client, roomId, member, retryCount);
+            break;
+
+          default:
+            _logger["default"].log("error", "ERROR INVITING MEMBER: ".concat(err));
+
+            _this2.handleBotCrash(roomId, err);
+
+            break;
+        }
+      });
+    }
+  }, {
+    key: "kickUserFromRoom",
+    value: function kickUserFromRoom(client, roomId, member) {
+      var _this3 = this;
+
+      var retries = arguments.length > 3 && arguments[3] !== undefined ? arguments[3] : 0;
+
+      _logger["default"].log("info", "KICKING OUT MEMBER: " + member);
+
+      if (retries > MAX_RETRIES) {
+        this.handleBotCrash(roomId, "Rate limit exceeded for bot account.");
+        return _logger["default"].log("error", "RATE LIMIT EXCEEDED AND RETRY LIMIT EXCEEDED");
+      }
+
+      return client.kick(roomId, member, KICK_REASON)["catch"](function (err) {
+        switch (err["name"]) {
+          case "M_LIMIT_EXCEEDED":
+            _logger["default"].log("info", "Rate limit exceeded, retrying.");
+
+            var retryCount = retries + 1;
+            var delay = retryCount * 2 * 1000;
+            return setTimeout(_this3.kickUserFromRoom, delay, client, roomId, member, retryCount);
+            break;
+
+          default:
+            _this3.handleBotCrash(roomId, err);
+
+            _logger["default"].log("error", "ERROR KICKING OUT MEMBER: ".concat(err));
+
             break;
         }
       });
@@ -84,63 +155,89 @@ function () {
   }, {
     key: "inviteFacilitators",
     value: function inviteFacilitators(roomId) {
-      var _this2 = this;
+      var _this4 = this;
 
       this.awaitingFacilitator[roomId] = true;
       var chatOffline = true;
       this.client.getJoinedRoomMembers(process.env.FACILITATOR_ROOM_ID).then(function (members) {
         var onlineMembersCount = 0;
         Object.keys(members["joined"]).forEach(function (member) {
-          var user = _this2.client.getUser(member);
+          var user = _this4.client.getUser(member);
 
           if (user.presence === "online" && member !== process.env.BOT_USERID) {
-            _logger["default"].log("info", "INVITING MEMBER: " + member);
-
             chatOffline = false;
 
-            _this2.client.invite(roomId, member)["catch"](function (err) {
-              return _logger["default"].log("error", "ERROR INVITING MEMBER: ".concat(err));
-            });
+            _this4.inviteUserToRoom(_this4.client, roomId, member);
           }
         });
       }).then(function () {
         if (chatOffline) {
-          _this2.sendMessage(roomId, process.env.CHAT_OFFLINE_MESSAGE);
+          _this4.sendMessage(roomId, process.env.CHAT_OFFLINE_MESSAGE);
         }
       })["catch"](function (err) {
+        _this4.handleBotCrash(roomId, err);
+
         _logger["default"].log("error", "ERROR GETTING ROOM MEMBERS: ".concat(err));
       });
     }
   }, {
     key: "uninviteFacilitators",
     value: function uninviteFacilitators(roomId) {
-      var _this3 = this;
+      var _this5 = this;
 
       this.awaitingFacilitator[roomId] = false;
       this.client.getJoinedRoomMembers(process.env.FACILITATOR_ROOM_ID).then(function (allFacilitators) {
-        _this3.client.getJoinedRoomMembers(roomId).then(function (roomMembers) {
+        _this5.client.getJoinedRoomMembers(roomId).then(function (roomMembers) {
           var membersIds = Object.keys(roomMembers["joined"]);
           var facilitatorsIds = Object.keys(allFacilitators["joined"]);
           facilitatorsIds.forEach(function (f) {
             if (!membersIds.includes(f)) {
-              _logger["default"].log("info", "kicking out " + f + " from " + roomId);
-
-              _this3.client.kick(roomId, f, "A facilitator has already joined this chat.").then(function () {
-                _logger["default"].log("info", "Kick success");
-              })["catch"](function (err) {
-                _logger["default"].log("error", "ERROR UNINVITING ROOM MEMBERS: ".concat(err));
-              });
+              _this5.kickUserFromRoom(_this5.client, roomId, f);
             }
           });
         });
       })["catch"](function (err) {
-        return _logger["default"].log("error", err);
+        _this5.handleBotCrash(roomId, err);
+
+        _logger["default"].log("error", err);
       });
+    }
+  }, {
+    key: "handleBotCrash",
+    value: function handleBotCrash(roomId, error) {
+      if (roomId) {
+        this.sendMessage(roomId, BOT_ERROR_MESSAGE);
+      }
+
+      this.sendMessage(process.env.FACILITATOR_ROOM_ID, "The Help Bot ran into an error: ".concat(error, ". Please verify that the chat service is working."));
+    }
+  }, {
+    key: "writeToTranscript",
+    value: function writeToTranscript(event) {
+      try {
+        var sender = event.getSender();
+        var roomId = event.getRoomId();
+        var content = event.getContent();
+        var date = event.getDate();
+        var time = date.toLocaleTimeString("en-GB", {
+          timeZone: "America/New_York"
+        });
+        var filepath = this.activeChatrooms[roomId].transcriptFile;
+
+        if (!content) {
+          return;
+        }
+
+        var message = "".concat(sender, " [").concat(time, "]: ").concat(content.body, "\n");
+        fs.appendFileSync(filepath, message, "utf8");
+      } catch (err) {
+        _logger["default"].log("error", "ERROR APPENDING TO TRANSCRIPT FILE: ".concat(err));
+      }
     }
   }, {
     key: "start",
     value: function start() {
-      var _this4 = this;
+      var _this6 = this;
 
       var localStorage = this.createLocalStorage();
       this.client.login("m.login.password", {
@@ -158,55 +255,129 @@ function () {
           deviceId: deviceId,
           sessionStore: new matrix.WebStorageSessionStore(localStorage)
         };
-        _this4.client = matrix.createClient(opts);
+        _this6.client = matrix.createClient(opts);
       })["catch"](function (err) {
         _logger["default"].log("error", "ERROR WITH LOGIN: ".concat(err));
       }).then(function () {
-        return _this4.client.initCrypto();
+        _this6.client.getDevices().then(function (data) {
+          var currentDeviceId = _this6.client.getDeviceId();
+
+          var allDeviceIds = data.devices.map(function (d) {
+            return d.device_id;
+          });
+          var oldDevices = allDeviceIds.filter(function (id) {
+            return id !== currentDeviceId;
+          });
+
+          _logger["default"].log("info", "DELETING OLD DEVICES: ".concat(oldDevices));
+
+          _this6.client.deleteMultipleDevices(oldDevices)["catch"](function (err) {
+            var auth = {
+              session: err.data.session,
+              type: "m.login.password",
+              user: process.env.BOT_USERID,
+              identifier: {
+                type: "m.id.user",
+                user: process.env.BOT_USERID
+              },
+              password: process.env.BOT_PASSWORD
+            };
+
+            _this6.client.deleteMultipleDevices(oldDevices, auth).then(function () {
+              return _logger["default"].log("info", "DELETED OLD DEVICES");
+            })["catch"](function (err) {
+              return _logger["default"].log("error", "ERROR DELETING OLD DEVICES: ".concat(JSON.stringify(err.data)));
+            });
+          });
+        });
+      }).then(function () {
+        return _this6.client.initCrypto();
       })["catch"](function (err) {
         return _logger["default"].log("error", "ERROR STARTING CRYPTO: ".concat(err));
       }).then(function () {
-        return _this4.client.getJoinedRooms().then(function (data) {
-          _this4.joinedRooms = data["joined_rooms"];
+        return _this6.client.getJoinedRooms().then(function (data) {
+          _this6.joinedRooms = data["joined_rooms"];
         });
       }).then(function () {
         // Automatically accept all room invitations
-        _this4.client.on("RoomMember.membership", function (event, member) {
-          if (member.membership === "invite" && member.userId === process.env.BOT_USERID && !_this4.joinedRooms.includes(member.roomId)) {
+        _this6.client.on("RoomMember.membership", function (event, member) {
+          if (member.membership === "invite" && member.userId === process.env.BOT_USERID && !_this6.joinedRooms.includes(member.roomId)) {
             _logger["default"].log("info", "Auto-joining room " + member.roomId);
 
-            _this4.client.joinRoom(member.roomId).then(function (room) {
-              _this4.sendMessage(process.env.FACILITATOR_ROOM_ID, "A support seeker requested a chat (Room ID: ".concat(member.roomId, ")"));
+            _this6.client.joinRoom(member.roomId).then(function (room) {
+              _this6.sendMessage(process.env.FACILITATOR_ROOM_ID, "A support seeker requested a chat (Room ID: ".concat(member.roomId, ")"));
             }).then(function () {
-              return _this4.inviteFacilitators(member.roomId);
+              return _this6.inviteFacilitators(member.roomId);
             })["catch"](function (err) {
               _logger["default"].log("error", err);
             });
           } // When a facilitator joins a support session, revoke the other invitations
 
 
-          if (member.membership === "join" && member.userId !== process.env.BOT_USERID && _this4.awaitingFacilitator[member.roomId]) {
-            _this4.activeChatrooms[member.roomId] = {
+          if (member.membership === "join" && member.userId !== process.env.BOT_USERID && _this6.awaitingFacilitator[member.roomId]) {
+            _this6.activeChatrooms[member.roomId] = {
               facilitator: member.userId
             };
 
-            _this4.sendMessage(member.roomId, "".concat(member.name, " has joined the chat."));
+            _this6.sendMessage(member.roomId, "".concat(member.name, " has joined the chat."));
 
-            _this4.sendMessage(process.env.FACILITATOR_ROOM_ID, "".concat(member.name, " joined the chat (Room ID: ").concat(member.roomId, ")"));
+            _this6.sendMessage(process.env.FACILITATOR_ROOM_ID, "".concat(member.name, " joined the chat (Room ID: ").concat(member.roomId, ")"));
 
-            _this4.uninviteFacilitators(member.roomId);
+            _this6.uninviteFacilitators(member.roomId);
+
+            if (process.env.CAPTURE_TRANSCRIPTS) {
+              var currentDate = new Date();
+              var dateOpts = {
+                year: "numeric",
+                month: "short",
+                day: "numeric"
+              };
+              var chatDate = currentDate.toLocaleDateString("en-GB", dateOpts);
+              var chatTime = currentDate.toLocaleTimeString("en-GB", {
+                timeZone: "America/New_York"
+              });
+              var filename = "".concat(chatDate, " - ").concat(chatTime, " - ").concat(member.roomId, ".txt");
+              var filepath = path.resolve(path.join("transcripts", filename));
+              _this6.activeChatrooms[member.roomId].transcriptFile = filepath;
+            }
           }
 
-          if (member.membership === "leave" && member.userId !== process.env.BOT_USERID && _this4.activeChatrooms[member.roomId] && member.userId === _this4.activeChatrooms[member.roomId].facilitator) {
-            _this4.sendMessage(member.roomId, "".concat(member.name, " has left the chat."));
+          if (member.membership === "leave" && member.userId !== process.env.BOT_USERID && _this6.activeChatrooms[member.roomId] && member.userId === _this6.activeChatrooms[member.roomId].facilitator) {
+            _this6.sendMessage(member.roomId, "".concat(member.name, " has left the chat."));
           }
         });
+
+        if (process.env.CAPTURE_TRANSCRIPTS) {
+          // encrypted messages
+          _this6.client.on("Event.decrypted", function (event, err) {
+            if (err) {
+              return _logger["default"].log("error", "ERROR DECRYPTING EVENT: ".concat(err));
+            }
+
+            if (event.getType() === "m.room.message") {
+              _this6.writeToTranscript(event);
+            }
+          }); // unencrypted messages
+
+
+          _this6.client.on("Room.timeline", function (event, room, toStartOfTimeline) {
+            if (event.getType() === "m.room.message" && !_this6.client.isCryptoEnabled()) {
+              if (event.isEncrypted()) {
+                return;
+              }
+
+              _this6.writeToTranscript(event);
+            }
+          });
+        }
       }).then(function () {
-        return _this4.client.startClient({
+        return _this6.client.startClient({
           initialSyncLimit: 0
         });
       })["catch"](function (err) {
-        return _logger["default"].log("error", "ERROR INITIALIZING CLIENT: ".concat(err));
+        _this6.handleBotCrash(undefined, err);
+
+        _logger["default"].log("error", "ERROR INITIALIZING CLIENT: ".concat(err));
       });
     }
   }]);

@@ -11,6 +11,10 @@ import * as matrix from "matrix-js-sdk";
 import logger from "./logger";
 
 const ENCRYPTION_CONFIG = { algorithm: "m.megolm.v1.aes-sha2" };
+const KICK_REASON = "A facilitator has already joined this chat.";
+const BOT_ERROR_MESSAGE =
+  "Something went wrong on our end, please restart the chat and try again.";
+const MAX_RETRIES = 3;
 
 class OcrccBot {
   constructor() {
@@ -43,6 +47,71 @@ class OcrccBot {
           break;
         default:
           logger.log("error", `ERROR SENDING MESSAGE: ${err}`);
+          this.handleBotCrash(roomId, err);
+          break;
+      }
+    });
+  }
+
+  inviteUserToRoom(client, roomId, member, retries = 0) {
+    logger.log("info", "INVITING MEMBER: " + member);
+    if (retries > MAX_RETRIES) {
+      this.handleBotCrash(roomId, "Rate limit exceeded for bot account");
+      return logger.log(
+        "error",
+        `RATE LIMIT EXCEEDED AND RETRY LIMIT EXCEEDED`
+      );
+    }
+    return client.invite(roomId, member).catch(err => {
+      switch (err["name"]) {
+        case "M_LIMIT_EXCEEDED":
+          logger.log("info", "Rate limit exceeded, retrying.");
+          const retryCount = retries + 1;
+          const delay = retryCount * 2 * 1000;
+          return setTimeout(
+            this.inviteUserToRoom,
+            delay,
+            client,
+            roomId,
+            member,
+            retryCount
+          );
+          break;
+        default:
+          logger.log("error", `ERROR INVITING MEMBER: ${err}`);
+          this.handleBotCrash(roomId, err);
+          break;
+      }
+    });
+  }
+
+  kickUserFromRoom(client, roomId, member, retries = 0) {
+    logger.log("info", "KICKING OUT MEMBER: " + member);
+    if (retries > MAX_RETRIES) {
+      this.handleBotCrash(roomId, "Rate limit exceeded for bot account.");
+      return logger.log(
+        "error",
+        `RATE LIMIT EXCEEDED AND RETRY LIMIT EXCEEDED`
+      );
+    }
+    return client.kick(roomId, member, KICK_REASON).catch(err => {
+      switch (err["name"]) {
+        case "M_LIMIT_EXCEEDED":
+          logger.log("info", "Rate limit exceeded, retrying.");
+          const retryCount = retries + 1;
+          const delay = retryCount * 2 * 1000;
+          return setTimeout(
+            this.kickUserFromRoom,
+            delay,
+            client,
+            roomId,
+            member,
+            retryCount
+          );
+          break;
+        default:
+          this.handleBotCrash(roomId, err);
+          logger.log("error", `ERROR KICKING OUT MEMBER: ${err}`);
           break;
       }
     });
@@ -58,13 +127,8 @@ class OcrccBot {
         Object.keys(members["joined"]).forEach(member => {
           const user = this.client.getUser(member);
           if (user.presence === "online" && member !== process.env.BOT_USERID) {
-            logger.log("info", "INVITING MEMBER: " + member);
             chatOffline = false;
-            this.client
-              .invite(roomId, member)
-              .catch(err =>
-                logger.log("error", `ERROR INVITING MEMBER: ${err}`)
-              );
+            this.inviteUserToRoom(this.client, roomId, member);
           }
         });
       })
@@ -74,6 +138,7 @@ class OcrccBot {
         }
       })
       .catch(err => {
+        this.handleBotCrash(roomId, err);
         logger.log("error", `ERROR GETTING ROOM MEMBERS: ${err}`);
       });
   }
@@ -88,20 +153,49 @@ class OcrccBot {
           const facilitatorsIds = Object.keys(allFacilitators["joined"]);
           facilitatorsIds.forEach(f => {
             if (!membersIds.includes(f)) {
-              logger.log("info", "kicking out " + f + " from " + roomId);
-              this.client
-                .kick(roomId, f, "A facilitator has already joined this chat.")
-                .then(() => {
-                  logger.log("info", "Kick success");
-                })
-                .catch(err => {
-                  logger.log("error", `ERROR UNINVITING ROOM MEMBERS: ${err}`);
-                });
+              this.kickUserFromRoom(this.client, roomId, f);
             }
           });
         });
       })
-      .catch(err => logger.log("error", err));
+      .catch(err => {
+        this.handleBotCrash(roomId, err);
+        logger.log("error", err);
+      });
+  }
+
+  handleBotCrash(roomId, error) {
+    if (roomId) {
+      this.sendMessage(roomId, BOT_ERROR_MESSAGE);
+    }
+
+    this.sendMessage(
+      process.env.FACILITATOR_ROOM_ID,
+      `The Help Bot ran into an error: ${error}. Please verify that the chat service is working.`
+    );
+  }
+
+  writeToTranscript(event) {
+    try {
+      const sender = event.getSender();
+      const roomId = event.getRoomId();
+      const content = event.getContent();
+      const date = event.getDate();
+      const time = date.toLocaleTimeString("en-GB", {
+        timeZone: "America/New_York"
+      });
+      const filepath = this.activeChatrooms[roomId].transcriptFile;
+
+      if (!content) {
+        return;
+      }
+
+      const message = `${sender} [${time}]: ${content.body}\n`;
+
+      fs.appendFileSync(filepath, message, "utf8");
+    } catch (err) {
+      logger.log("error", `ERROR APPENDING TO TRANSCRIPT FILE: ${err}`);
+    }
   }
 
   start() {
@@ -131,6 +225,32 @@ class OcrccBot {
       })
       .catch(err => {
         logger.log("error", `ERROR WITH LOGIN: ${err}`);
+      })
+      .then(() => {
+        this.client.getDevices().then(data => {
+          const currentDeviceId = this.client.getDeviceId();
+          const allDeviceIds = data.devices.map(d => d.device_id);
+          const oldDevices = allDeviceIds.filter(id => id !== currentDeviceId);
+          logger.log("info", `DELETING OLD DEVICES: ${oldDevices}`);
+          this.client.deleteMultipleDevices(oldDevices).catch(err => {
+            const auth = {
+              session: err.data.session,
+              type: "m.login.password",
+              user: process.env.BOT_USERID,
+              identifier: { type: "m.id.user", user: process.env.BOT_USERID },
+              password: process.env.BOT_PASSWORD
+            };
+            this.client
+              .deleteMultipleDevices(oldDevices, auth)
+              .then(() => logger.log("info", "DELETED OLD DEVICES"))
+              .catch(err =>
+                logger.log(
+                  "error",
+                  `ERROR DELETING OLD DEVICES: ${JSON.stringify(err.data)}`
+                )
+              );
+          });
+        });
       })
       .then(() => this.client.initCrypto())
       .catch(err => logger.log("error", `ERROR STARTING CRYPTO: ${err}`))
@@ -180,6 +300,24 @@ class OcrccBot {
               `${member.name} joined the chat (Room ID: ${member.roomId})`
             );
             this.uninviteFacilitators(member.roomId);
+            if (process.env.CAPTURE_TRANSCRIPTS) {
+              const currentDate = new Date();
+              const dateOpts = {
+                year: "numeric",
+                month: "short",
+                day: "numeric"
+              };
+              const chatDate = currentDate.toLocaleDateString(
+                "en-GB",
+                dateOpts
+              );
+              const chatTime = currentDate.toLocaleTimeString("en-GB", {
+                timeZone: "America/New_York"
+              });
+              const filename = `${chatDate} - ${chatTime} - ${member.roomId}.txt`;
+              const filepath = path.resolve(path.join("transcripts", filename));
+              this.activeChatrooms[member.roomId].transcriptFile = filepath;
+            }
           }
 
           if (
@@ -194,9 +332,36 @@ class OcrccBot {
             );
           }
         });
+
+        if (process.env.CAPTURE_TRANSCRIPTS) {
+          // encrypted messages
+          this.client.on("Event.decrypted", (event, err) => {
+            if (err) {
+              return logger.log("error", `ERROR DECRYPTING EVENT: ${err}`);
+            }
+            if (event.getType() === "m.room.message") {
+              this.writeToTranscript(event);
+            }
+          });
+          // unencrypted messages
+          this.client.on("Room.timeline", (event, room, toStartOfTimeline) => {
+            if (
+              event.getType() === "m.room.message" &&
+              !this.client.isCryptoEnabled()
+            ) {
+              if (event.isEncrypted()) {
+                return;
+              }
+              this.writeToTranscript(event);
+            }
+          });
+        }
       })
       .then(() => this.client.startClient({ initialSyncLimit: 0 }))
-      .catch(err => logger.log("error", `ERROR INITIALIZING CLIENT: ${err}`));
+      .catch(err => {
+        this.handleBotCrash(undefined, err);
+        logger.log("error", `ERROR INITIALIZING CLIENT: ${err}`);
+      });
   }
 }
 
