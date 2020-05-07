@@ -1,0 +1,5 @@
+.env
+node_modules
+*.log
+__mocks__/test_transcript.txt
+transcripts/*.txt
