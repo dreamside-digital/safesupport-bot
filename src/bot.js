@@ -230,6 +230,9 @@ class MatrixBot {
         case "transcript please":
           this.sendTranscript(senderId, roomId);
           break;
+        case "delete transcript":
+          this.deleteTranscript(senderId, roomId);
+          break;
         case "hi":
           const responses = [
             "Hi!",
@@ -311,6 +314,38 @@ class MatrixBot {
         senderId
       );
     }
+  }
+
+  deleteTranscript(senderId, roomId) {
+    const transcriptFile = this.localStorage.getItem(`${roomId}-transcript`)
+
+    if (!transcriptFile) {
+      return this.sendTextMessage(
+        roomId,
+        "There is no transcript for this chat.",
+        senderId
+      );
+    }
+
+    fs.unlink(transcriptFile, (err) => {
+      if (err) {
+        logger.log('error', "UNABLE TO DELETE TRANSCRIPT FILE => " + transcriptFile)
+        logger.log('error', err)
+
+        return this.sendTextMessage(
+          roomId,
+          `There was an error deleting the transcript: ${err}`,
+          senderId
+        );
+      }
+      this.localStorage.removeItem(`${roomId}-transcript`)
+      logger.log('info', "DELETED TRANSCRIPT FILE => " + transcriptFile)
+      this.sendTextMessage(
+        roomId,
+        `The transcript file has been deleted.`,
+        senderId
+      );
+    });
   }
 
   async deleteOldDevices() {
@@ -429,11 +464,12 @@ class MatrixBot {
 
         const memberCount = room.getJoinedMemberCount()
 
-        if (memberCount === 1) { // just the bot
+        if (memberCount === 1) { // just the bot left
           logger.log("info", `LEAVING EMPTY ROOM ==> ${member.roomId}`);
-          this.client.leave(member.roomId)
+          this.deleteTranscript(member.userId, member.roomId);
           this.localStorage.removeItem(`${member.roomId}-facilitator`)
           this.localStorage.removeItem(`${member.roomId}-transcript`)
+          this.client.leave(member.roomId)
         }
       }
     });
