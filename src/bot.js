@@ -117,7 +117,8 @@ class MatrixBot {
         const user = this.client.getUser(memberId);
         if (
           user &&
-          user.presence === "online" &&
+          // presence can be "online", "unavailable", or "offline"
+          user.presence !== "offline" &&
           memberId !== this.config.BOT_USERID
         ) {
           chatOffline = false;
